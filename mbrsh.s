@@ -3,6 +3,8 @@
 ; [0400; 0500) BDA
 ; [    ; 7c00) stack
 ; [7c00; 7e00) MBR
+; [7de0; 7deb) filename buffer
+; [7df0; 7e00) EDD disk packet
 ; [7e00; 8000) BPB sector
 
 ; FILE structure:
@@ -68,6 +70,10 @@ start:
 	xor eax, eax
 	int i_partread
 
+; Check for 512-byte sectors.
+	cmp byte[BPB_BytsPerSec+1], 2
+	jne short error
+
 	; eax = 0
 	mov al, byte[BPB_NumFATs]
 	mul dword[BPB_FATSz32]
@@ -124,49 +130,24 @@ readline:
 	dec di
 	iret
 
-; Prepare a disk operation packet.
+; Reads the next sector of a file.
 ; Input:
-;  eax = LBA (partition-relative)
-;  es:di = operation buffer
-; Output:
-;  dl = drive number
-;  ds:si = disk packet pointer (0000:7DF0)
-dopacket:
-	push cs
-	pop ds
-	add eax, [0x7c00+0x1be+8]
-	mov si, 0x7df0
-	mov dword[si], 0x10010
-	mov [si+4], di
-	mov [si+6], es
-	mov [si+8], eax
-	xor eax, eax
-	mov [si+12], eax
-.diskload:
-	mov dl, 0 ; overwritten during init
-	ret
-
-; Read sector 
-; Input: as in dopacket
-; Stops execution on erro
-partread:
+;  es:di = FILE
+nextsector:
 	pusha
-.after_pusha
-	push ds
-	call dopacket
-	mov ah, 0x42
-	int i_biosdisk
-	jc short error
-	pop ds
-	popa
-	iret
-
-error:
-	mov ax, 0x0e21
-	xor bx, bx
-	int i_biosdisp
-	cli
-	hlt
+	mov ebx, dword[es:di+FILE_current_cluster]
+	mov cx, word[es:di+FILE_offset] ; TODO(opt): get pointer to the var in a register?
+	or cx, 0x1FF
+	inc cx
+	mov word[es:di+FILE_offset], cx
+	shr cx, 9
+	cmp cl, byte[cs:BPB_SecPerClus]
+	jl short .nonewcluster
+	xor cx, cx
+	
+.nonewcluster
+	
+	db 0xb2 ; skip the pusha from readcluster by loading the opcode into dl
 
 ; Read a sector of a cluster.
 ; Input:
@@ -178,10 +159,47 @@ readcluster:
 	movzx eax, byte[cs:BPB_SecPerClus]
 	mul ebx
 .offset:
-	add eax, 0xaaaaaaaa ; overwritten during init
+	add eax, dword 0xaaaaaaaa ; overwritten during init
 	movzx ecx, cl
 	add eax, ecx
-	jmp short partread.after_pusha
+	db 0xb1 ; skip the pusha from partread by loading the opcode into cl
+
+; Read sector 
+; Input:
+;  eax = LBA (partition-relative)
+;  es:di = operation buffer
+; Stops execution on error
+partread:
+	pusha
+	push ds
+
+	push cs
+	pop ds
+
+	add eax, [0x7c00+0x1be+8]
+	mov si, 0x7df0
+	mov dword[si], 0x10010
+	mov [si+4], di
+	mov [si+6], es
+	mov [si+8], eax
+	xor eax, eax
+	mov [si+12], eax
+.diskload:
+	mov dl, 0 ; overwritten during init
+	mov ah, 0x42
+	int i_biosdisk
+	jc short error
+
+	pop ds
+	popa
+	iret
+
+error:
+	mov ax, 0x0e21
+	xor bx, bx
+	int i_biosdisp
+	cli
+	hlt
 
 ; Open a file for reading.
 ; Input:

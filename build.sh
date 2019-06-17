@@ -2,7 +2,7 @@
 set -ev
 rm -rf gen
 mkdir gen
-nasm mbrsh.s -o gen/mbrsh.bin
+nasm mbrsh.s -o gen/mbrsh.bin -l gen/mbrsh.lst
 truncate -s 64M gen/fs.img
 mkfs.fat -F 32 gen/fs.img
 mcopy -i gen/fs.img fs/* ::
