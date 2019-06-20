@@ -65,13 +65,13 @@ shell:
 	; command dispatch
 	lodsb
 	or al, al
-	jnz short .not_singledump
+	jnz short not_singledump
 
 	mov cx, 1
 	jmp short hexdump
-.not_singledump:
+not_singledump:
 	cmp al, '.'
-	jnz short .not_rangedump
+	jnz short not_rangedump
 
 	call readhexword
 	jc short parse_error
@@ -83,21 +83,7 @@ shell:
 
 	lodsb
 	or al, al
-	jz short hexdump
-	jnz short parse_error ; TODO: optimize?
-
-.not_rangedump:
-
-parse_error:
-	dec si
-	lodsb
-	or al, al
-	jz short .skip_char
-	int i_putchar
-.skip_char:
-	mov al, '?'
-	int i_putchar
-	jmp short shell
+	jnz short parse_error
 
 ; Print a hexdump
 ; Returns to `shell`
@@ -130,6 +116,38 @@ hexdump:
 	pop cx
 	loop hexdump
 	jmp short shell
+
+not_rangedump:
+	cmp al, ':'
+	jnz short not_poke
+
+	mov di, dx
+.loop:
+	lodsb
+	or al, al
+	mov dx, di
+	jz short shell
+
+	cmp al, ' '
+	jz short .loop
+
+	dec si
+	call readhexbyte
+	jc short parse_error
+	stosb
+	jmp short .loop
+
+not_poke:
+parse_error:
+	dec si
+	lodsb
+	or al, al
+	jz short .skip_char
+	int i_putchar
+.skip_char:
+	mov al, '?'
+	int i_putchar
+	jmp near shell
 
 ; Read a line of text. The result is null-terminated. No overflow checking is performed
 ; because any memory access can be performed with the monitor with the intended
