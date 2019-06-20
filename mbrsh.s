@@ -93,7 +93,7 @@ not_singledump:
 ; Output:
 ;  CX = 0
 ;  DX = first unprinted byte
-; Clobbers AX, BX, BP
+; Clobbers AX
 hexdump:
 	mov si, dx
 	mov al, dh
@@ -269,7 +269,6 @@ readhexchar:
 ;  (screen)
 ;  AL = the lower nibble as ASCII
 ;  DL = the byte, unchanged
-; Clobbers BP
 writehexbyte:
 	mov dl, al
 	shr al, 4
@@ -284,7 +283,6 @@ writehexbyte:
 ; Output:
 ;  (screen)
 ;  AL = digit as ASCII
-; Clobbers BP
 writehexchar:
 	add al, '0'
 	cmp al, '9'
