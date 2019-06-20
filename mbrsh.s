@@ -18,10 +18,10 @@ ivtptr:
 %define i_biosdisk 0x13
 %define i_bioskbd  0x16
 
-%define i_readline 0x80
+%define i_readline 0x20
 	dw readline
 
-%define i_putchar  0x81
+%define i_putchar  0x21
 	dw putchar
 .end:
 
@@ -35,7 +35,7 @@ start:
 	mov [diskread.diskload+1], dl
 	sti
 
-	mov di, 0x200
+	mov di, 0x20 * 4
 	mov si, ivtptr
 	mov cl, ivtptr.end - ivtptr
 .ivtloop:
