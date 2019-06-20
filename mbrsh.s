@@ -20,6 +20,9 @@ ivtptr:
 
 %define i_readline 0x80
 	dw readline
+
+%define i_putchar  0x81
+	dw putchar
 .end:
 
 start:
@@ -45,9 +48,8 @@ start:
 
 	xor dx, dx
 shell:
-	xor bx, bx
-	mov ax, 0x0e00 + '>'
-	int i_biosdisp
+	mov al, '>'
+	int i_putchar
 
 	mov di, 0x600
 	int i_readline
@@ -88,15 +90,13 @@ shell:
 
 parse_error:
 	dec si
-	mov ah, 0x0e
-	xor bx, bx
 	lodsb
 	or al, al
 	jz short .skip_char
-	int i_biosdisp
+	int i_putchar
 .skip_char:
 	mov al, '?'
-	int i_biosdisp
+	int i_putchar
 	jmp short shell
 
 ; Print a hexdump
@@ -115,25 +115,27 @@ hexdump:
 	mov ax, si
 	call writehexbyte
 	mov al, ':'
-	int i_biosdisp
+	int i_putchar
 	push cx
 	mov cx, 16
 .byteloop:
 	mov al, ' '
-	int i_biosdisp
+	int i_putchar
 	lodsb
 	call writehexbyte
 	loop .byteloop
-	mov al, 13
-	int i_biosdisp
-	mov al, 10
-	int i_biosdisp
+	mov al, `\r`
+	int i_putchar
 	mov dx, si
 	pop cx
 	loop hexdump
 	jmp short shell
 
-; Read a line of text, store at ES:DI. Null-terminated.
+; Read a line of text. The result is null-terminated. No overflow checking is performed
+; because any memory access can be performed with the monitor with the intended
+; functionality.
+; Input:
+;  ES:DI = output buffer pointer
 readline:
 	pusha
 	mov si, di
@@ -149,16 +151,32 @@ readline:
 	db 0xb4 ; load the opcode of the stosb to AH to skip its execution
 .nobackspace:
 	stosb
+	int i_putchar
 
+	cmp al, `\r`
+	jne short .loop
+
+	dec di ; undo the store of the line terminatior
+	mov byte[di], 0
+	popa
+	iret
+
+; Put a character on the screen. Expands \r into \r\n because the latter is required
+; by the BIOS for a proper newline. \r is used to signify newlines because that's what
+; the keyboard gives us.
+; Input:
+;  AL = ASCII character
+; TODO: replace backspace with "\b \b" to erase properly? (will it fit?)
+putchar:
+	pusha
 	mov ah, 0x0e
 	xor bx, bx
 	int i_biosdisp
-	cmp al, 13
-	jne short .loop
-	mov al, 10
+	cmp al, `\r` ; all registers are preserved by the BIOS function
+	jne short .skip_newline
+	mov al, `\n`
 	int i_biosdisp
-	dec di ; undo the store of the line terminatior
-	mov byte[di], 0
+.skip_newline:
 	popa
 	iret
 
@@ -192,12 +210,12 @@ readhexword:
 ; Clobbers BL
 readhexbyte:
 	lodsb
-	call hexparse
+	call readhexchar
 	jc short .fail
 	shl al, 4
 	mov bl, al
 	lodsb
-	call hexparse
+	call readhexchar
 	jc short .fail
 	or al, bl ; carry flag is clear
 .fail:
@@ -212,7 +230,7 @@ readhexbyte:
 ; Output (failure):
 ;  CF set
 ;  AL = undefined
-hexparse:
+readhexchar:
 	sub al, '0'
 	jc short .end
 	cmp al, 10 ; jb = jc, so right now carry = ok
@@ -231,15 +249,13 @@ hexparse:
 ;  AL = the byte
 ; Output:
 ;  (screen)
-;  AH = 0x0e
 ;  AL = the lower nibble as ASCII
-;  BX = 0
 ;  DL = the byte, unchanged
 ; Clobbers BP
 writehexbyte:
 	mov dl, al
 	shr al, 4
-	call hexput
+	call writehexchar
 	mov al, dl
 	and al, 0x0f
 	; fallthrough
@@ -249,19 +265,15 @@ writehexbyte:
 ;  AL = digit [0; 0x10)
 ; Output:
 ;  (screen)
-;  AH = 0x0e
 ;  AL = digit as ASCII
-;  BX = 0
 ; Clobbers BP
-hexput:
+writehexchar:
 	add al, '0'
 	cmp al, '9'
 	jbe .ok
 	add al, 'a' - '0' - 10
 .ok:
-	mov ah, 0x0e
-	xor bx, bx
-	int i_biosdisp
+	int i_putchar
 	ret
 
 ; Read sector 
@@ -294,8 +306,7 @@ diskread:
 	iret
 
 error:
-	mov ax, 0x0e21
-	xor bx, bx
-	int i_biosdisp
+	mov al, '!'
+	int i_putchar
 	cli
 	hlt
