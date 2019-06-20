@@ -41,9 +41,7 @@ start:
 	mov cl, ivtptr.end - ivtptr
 .ivtloop:
 	movsw
-	; it's not necessary to clear the upper part of EAX now, but it saves bytes
-	; compared to doing it again before the BPB read
-	xor eax, eax
+	xor ax, ax
 	stosw
 	loop .ivtloop
 
