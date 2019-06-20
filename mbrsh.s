@@ -35,6 +35,7 @@ start:
 	mov [diskread.diskload+1], dl
 	sti
 
+	cld
 	mov di, 0x20 * 4
 	mov si, ivtptr
 	mov cl, ivtptr.end - ivtptr
@@ -155,6 +156,7 @@ parse_error:
 ;  ES:DI = output buffer pointer
 readline:
 	pusha
+	cld
 	mov si, di
 .loop:
 	mov ah, 0
