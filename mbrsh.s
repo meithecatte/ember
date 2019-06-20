@@ -5,24 +5,8 @@
 ; [7c00; 7e00) MBR
 ; [7de0; 7deb) filename buffer
 ; [7df0; 7e00) EDD disk packet
-; [7e00; 8000) BPB sector
+; [7e00;     ) variables
 
-; FILE structure:
-; .buffer: ds 0x200    ; (offset 0)
-; .initial_cluster: dd ; (offset 0x200)
-; .current_cluster: dd ; (offset 0x204)
-; .offset: dw          ; (offset 0x208)
-
-%define FILE_initial_cluster 0x200
-%define FILE_current_cluster 0x204
-%define FILE_offset          0x208
-%define sizeof_FILE          0x20a
-
-%define BPB_loadaddr    0x7e00
-%define BPB_SecPerClus  BPB_loadaddr + 13 ; db
-%define BPB_ResvdSecCnt BPB_loadaddr + 14 ; dw
-%define BPB_NumFATs     BPB_loadaddr + 16 ; db
-%define BPB_FATSz32     BPB_loadaddr + 36 ; dd
 org 0x7c00
 bits 16
 
@@ -36,12 +20,6 @@ ivtptr:
 
 %define i_readline 0x80
 	dw readline
-%define i_partread 0x81
-	dw partread
-%define i_readcluster 0x82
-	dw readcluster
-%define i_readopen 0x83
-	dw readopen
 .end:
 
 start:
@@ -51,7 +29,7 @@ start:
 	mov es, cx
 	mov ss, cx
 	mov sp, 0x7c00
-	mov [dopacket.diskload+1], dl
+	mov [diskread.diskload+1], dl
 	sti
 
 	mov di, 0x200
@@ -65,33 +43,7 @@ start:
 	stosw
 	loop .ivtloop
 
-; Read the BPB
-	mov di, 0x7e00
-	xor eax, eax
-	int i_partread
-
-; Check for 512-byte sectors.
-	cmp byte[BPB_BytsPerSec+1], 2
-	jne short error
-
-	; eax = 0
-	mov al, byte[BPB_NumFATs]
-	mul dword[BPB_FATSz32]
-	movzx ebx, byte[BPB_SecPerClus]
-	add bx, bx
-	sub eax, ebx
-	mov bx, word[BPB_ResvdSecCnt]
-	add eax, ebx
-	mov [readcluster.offset+2], eax
-
-	mov bx, 3
-	mov cl, 0
-	mov di, 0x8000
-	int i_readcluster
-
-	cli
-	hlt
-
+	xor dx, dx
 shell:
 	xor bx, bx
 	mov ax, 0x0e00 + '>'
@@ -99,21 +51,102 @@ shell:
 
 	mov di, 0x600
 	int i_readline
-	; TODO
 
-; Read a line of text, store at ES:DI. Returns end in DI.
+	mov si, di
+	call readhexword
+	jnc short .addr
+	mov si, di
+	db 0xbb ; load the two-byte `mov dx, ax` below into BX to skip it
+.addr:
+	mov dx, ax
+
+	; command dispatch
+	lodsb
+	or al, al
+	jnz short .not_singledump
+
+	mov cx, 1
+	jmp short hexdump
+.not_singledump:
+	cmp al, '.'
+	jnz short .not_rangedump
+
+	call readhexword
+	jc short parse_error
+
+	sub ax, dx ; length in bytes
+	add ax, 15 ; round up
+	shr ax, 4  ; into line count
+	mov cx, ax ; prepare loop counter
+
+	lodsb
+	or al, al
+	jz short hexdump
+	jnz short parse_error ; TODO: optimize?
+
+.not_rangedump:
+
+parse_error:
+	dec si
+	mov ah, 0x0e
+	xor bx, bx
+	lodsb
+	or al, al
+	jz short .skip_char
+	int i_biosdisp
+.skip_char:
+	mov al, '?'
+	int i_biosdisp
+	jmp short shell
+
+; Print a hexdump
+; Returns to `shell`
+; Input:
+;  DX = data pointer
+;  CX = line count
+; Output:
+;  CX = 0
+;  DX = first unprinted byte
+; Clobbers AX, BX, BP
+hexdump:
+	mov si, dx
+	mov al, dh
+	call writehexbyte
+	mov ax, si
+	call writehexbyte
+	mov al, ':'
+	int i_biosdisp
+	push cx
+	mov cx, 16
+.byteloop:
+	mov al, ' '
+	int i_biosdisp
+	lodsb
+	call writehexbyte
+	loop .byteloop
+	mov al, 13
+	int i_biosdisp
+	mov al, 10
+	int i_biosdisp
+	mov dx, si
+	pop cx
+	loop hexdump
+	jmp short shell
+
+; Read a line of text, store at ES:DI. Null-terminated.
 readline:
-	push ax
-	push bx
-	push bp ; some BIOSes thrash BP on scroll -RBIL
+	pusha
+	mov si, di
 .loop:
 	mov ah, 0
 	int i_bioskbd
 
 	cmp al, 8
 	jne short .nobackspace
+	cmp si, di
+	je short .loop
 	dec di
-	db 0xb4 ; load the opcode of the stosb to AH to skip it
+	db 0xb4 ; load the opcode of the stosb to AH to skip its execution
 .nobackspace:
 	stosb
 
@@ -124,59 +157,125 @@ readline:
 	jne short .loop
 	mov al, 10
 	int i_biosdisp
-	pop bp
-	pop bx
-	pop ax
-	dec di
+	dec di ; undo the store of the line terminatior
+	mov byte[di], 0
+	popa
 	iret
 
-; Reads the next sector of a file.
+; Parse a hexadecimal word.
 ; Input:
-;  es:di = FILE
-nextsector:
-	pusha
-	mov ebx, dword[es:di+FILE_current_cluster]
-	mov cx, word[es:di+FILE_offset] ; TODO(opt): get pointer to the var in a register?
-	or cx, 0x1FF
-	inc cx
-	mov word[es:di+FILE_offset], cx
-	shr cx, 9
-	cmp cl, byte[cs:BPB_SecPerClus]
-	jl short .nonewcluster
-	xor cx, cx
-	
-.nonewcluster
-	
-	db 0xb2 ; skip the pusha from readcluster by loading the opcode into dl
+;  SI = input buffer pointer
+; Output (success):
+;  CF clear
+;  AX = parsed word
+;  SI = input + 4
+; Output (failure):
+;  CF set
+;  SI = after first invalid character
+readhexword:
+	call readhexbyte
+	jc short readhexbyte.fail
+	mov ah, al
+	; fallthrough
 
-; Read a sector of a cluster.
+; Parse a hexadecimal byte.
 ; Input:
-;  ebx = cluster number
-;  cl = sector offset within cluster
-;  es:di = buffer (512 bytes)
-readcluster:
-	pusha
-	movzx eax, byte[cs:BPB_SecPerClus]
-	mul ebx
-.offset:
-	add eax, dword 0xaaaaaaaa ; overwritten during init
-	movzx ecx, cl
-	add eax, ecx
-	db 0xb1 ; skip the pusha from partread by loading the opcode into cl
+;  SI = input buffer pointer
+; Output (success):
+;  CF clear
+;  AL = parsed byte
+;  SI = input + 2
+; Output (failure):
+;  CF set
+;  AL = undefined
+;  SI = after invalid character
+; Clobbers BL
+readhexbyte:
+	lodsb
+	call hexparse
+	jc short .fail
+	shl al, 4
+	mov bl, al
+	lodsb
+	call hexparse
+	jc short .fail
+	or al, bl ; carry flag is clear
+.fail:
+	ret
+
+; Parse a hexadecimal digit.
+; Input:
+;  AL = ASCII character
+; Output (success):
+;  CF clear
+;  AL = digit value [0; 16)
+; Output (failure):
+;  CF set
+;  AL = undefined
+hexparse:
+	sub al, '0'
+	jc short .end
+	cmp al, 10 ; jb = jc, so right now carry = ok
+	cmc ; now, carry = try different range
+	jnc short .end
+	sub al, 'a' - '0'
+	jc short .end
+	add al, 10
+	cmp al, 16
+	cmc ; before, carry = ok. now, carry = error
+.end:
+	ret
+
+; Write a hexadecimal byte.
+; Input:
+;  AL = the byte
+; Output:
+;  (screen)
+;  AH = 0x0e
+;  AL = the lower nibble as ASCII
+;  BX = 0
+;  DL = the byte, unchanged
+; Clobbers BP
+writehexbyte:
+	mov dl, al
+	shr al, 4
+	call hexput
+	mov al, dl
+	and al, 0x0f
+	; fallthrough
+
+; Write a hexadecimal digit.
+; Input:
+;  AL = digit [0; 0x10)
+; Output:
+;  (screen)
+;  AH = 0x0e
+;  AL = digit as ASCII
+;  BX = 0
+; Clobbers BP
+hexput:
+	add al, '0'
+	cmp al, '9'
+	jbe .ok
+	add al, 'a' - '0' - 10
+.ok:
+	mov ah, 0x0e
+	xor bx, bx
+	int i_biosdisp
+	ret
 
 ; Read sector 
 ; Input:
-;  eax = LBA (partition-relative)
+;  eax = LBA
 ;  es:di = operation buffer
 ; Stops execution on error
-partread:
+diskread:
 	pusha
 	push ds
 
 	push cs
 	pop ds
 
-	add eax, [0x7c00+0x1be+8]
 	mov si, 0x7df0
 	mov dword[si], 0x10010
 	mov [si+4], di
@@ -200,11 +299,3 @@ error:
 	int i_biosdisp
 	cli
 	hlt
-
-; Open a file for reading.
-; Input:
-;  DS:SI = file name
-;  ES:DI = file structure
-; Output:
-;  carry flag set if not found
-readopen:
