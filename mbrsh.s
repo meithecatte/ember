@@ -46,7 +46,7 @@ start:
 	stosw
 	loop .ivtloop
 
-	xor dx, dx
+	xor bx, bx
 shell:
 	mov al, '>'
 	int i_putchar
@@ -54,13 +54,14 @@ shell:
 	mov di, 0x600
 	int i_readline
 
+	; Speculatively parse a new pointer
 	mov si, di
 	call readhexword
 	jnc short .addr
-	mov si, di
-	db 0xbb ; load the two-byte `mov dx, ax` below into BX to skip it
+	mov si, di ; revert the read pointer
+	db 0xba ; load the two-byte `mov bx, ax` below into DX to skip it
 .addr:
-	mov dx, ax
+	mov bx, ax
 
 	; command dispatch
 	lodsb
@@ -76,7 +77,7 @@ not_singledump:
 	call readhexword
 	jc short parse_error
 
-	sub ax, dx ; length in bytes
+	sub ax, bx ; length in bytes
 	add ax, 15 ; round up
 	shr ax, 4  ; into line count
 	mov cx, ax ; prepare loop counter
@@ -88,17 +89,16 @@ not_singledump:
 ; Print a hexdump
 ; Returns to `shell`
 ; Input:
-;  DX = data pointer
+;  BX = data pointer
 ;  CX = line count
 ; Output:
+;  BX = first unprinted byte
 ;  CX = 0
-;  DX = first unprinted byte
 ; Clobbers AX
 hexdump:
-	mov si, dx
-	mov al, dh
+	mov al, bh
 	call writehexbyte
-	mov ax, si
+	mov al, bl
 	call writehexbyte
 	mov al, ':'
 	int i_putchar
@@ -107,12 +107,12 @@ hexdump:
 .byteloop:
 	mov al, ' '
 	int i_putchar
-	lodsb
+	mov al, [bx]
+	inc bx
 	call writehexbyte
 	loop .byteloop
 	mov al, `\r`
 	int i_putchar
-	mov dx, si
 	pop cx
 	loop hexdump
 	jmp short shell
@@ -121,11 +121,9 @@ not_rangedump:
 	cmp al, ':'
 	jnz short not_poke
 
-	mov di, dx
 .loop:
 	lodsb
 	or al, al
-	mov dx, di
 	jz short shell
 
 	cmp al, ' '
@@ -134,7 +132,8 @@ not_rangedump:
 	dec si
 	call readhexbyte
 	jc short parse_error
-	stosb
+	mov [bx], al
+	inc bx
 	jmp short .loop
 
 not_poke:
@@ -208,6 +207,7 @@ putchar:
 ; Output (failure):
 ;  CF set
 ;  SI = after first invalid character
+; Clobbers DL
 readhexword:
 	call readhexbyte
 	jc short readhexbyte.fail
@@ -225,17 +225,17 @@ readhexword:
 ;  CF set
 ;  AL = undefined
 ;  SI = after invalid character
-; Clobbers BL
+; Clobbers DL
 readhexbyte:
 	lodsb
 	call readhexchar
 	jc short .fail
 	shl al, 4
-	mov bl, al
+	mov dl, al
 	lodsb
 	call readhexchar
 	jc short .fail
-	or al, bl ; carry flag is clear
+	or al, dl ; carry flag is clear
 .fail:
 	ret
 
