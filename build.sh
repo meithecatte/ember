@@ -2,5 +2,5 @@
 set -ev
 rm -rf gen
 mkdir gen
-nasm mbrsh.s -o gen/mbrsh.img -l gen/mbrsh.lst
-[ "$1" = "run" ] && qemu-system-i386 -curses -drive format=raw,file=gen/mbrsh.img
+nasm ember.s -o gen/ember.img -l gen/ember.lst
+[ "$1" = "run" ] && qemu-system-i386 -curses -drive format=raw,file=gen/ember.img
