@@ -10,6 +10,7 @@
 org 0x7c00
 bits 16
 
+%define linebuffer 0x600
 ; Some BIOSes start with CS=07c0. Make sure this does not wreak havoc
 	jmp 0:start
 
@@ -50,17 +51,18 @@ shell:
 	mov al, '>'
 	int i_putchar
 
-	mov di, 0x600
 	int i_readline
 
 	; Speculatively parse a new pointer
-	mov si, di
+	mov si, linebuffer
 	call readhexword
-	jnc short .addr
-	mov si, di ; revert the read pointer
-	db 0xba ; load the two-byte `mov bx, ax` below into DX to skip it
-.addr:
-	mov bx, ax
+	jc short .oldaddr
+	xchg bx, ax ; mov bx, ax
+	mov di, bx
+	jmp short .gotaddr
+.oldaddr:
+	mov si, linebuffer
+.gotaddr:
 
 	; command dispatch
 	lodsb
@@ -119,6 +121,7 @@ hexdump:
 not_rangedump:
 	cmp al, ':'
 	jnz short not_poke
+	mov bx, di
 
 .loop:
 	lodsb
@@ -131,8 +134,7 @@ not_rangedump:
 	dec si
 	call readhexbyte
 	jc short parse_error
-	mov [bx], al
-	inc bx
+	stosb
 	jmp short .loop
 
 not_poke:
@@ -147,22 +149,19 @@ parse_error:
 	int i_putchar
 	jmp near shell
 
-; Read a line of text. The result is null-terminated. No overflow checking is performed
-; because any memory access can be performed with the monitor with the intended
-; functionality.
-; Input:
-;  ES:DI = output buffer pointer
+; Read a line of text and store it in the global `linebuffer`. The result is
+; null-terminated. No overflow checking is performed.
 readline:
 	pusha
 	cld
-	mov si, di
+	mov di, linebuffer
 .loop:
 	mov ah, 0
 	int i_bioskbd
 
 	cmp al, 8
 	jne short .nobackspace
-	cmp si, di
+	cmp di, linebuffer
 	je short .loop
 	dec di
 	db 0xb4 ; load the opcode of the stosb to AH to skip its execution
