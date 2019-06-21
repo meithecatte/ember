@@ -138,6 +138,13 @@ not_rangedump:
 	jmp short .loop
 
 not_poke:
+	cmp al, 'g'
+	jnz short not_run
+
+	call di
+	jmp short shell
+
+not_run:
 parse_error:
 	dec si
 	lodsb
@@ -331,3 +338,7 @@ error:
 	int i_putchar
 	cli
 	hlt
+
+times 446 - ($ - $$) db 0
+times 64 db 0xff
+	dw 0xaa55
