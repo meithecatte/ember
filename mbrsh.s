@@ -182,7 +182,6 @@ readline:
 ; the keyboard gives us.
 ; Input:
 ;  AL = ASCII character
-; TODO: replace backspace with "\b \b" to erase properly? (will it fit?)
 putchar:
 	pusha
 	mov ah, 0x0e
@@ -193,6 +192,13 @@ putchar:
 	mov al, `\n`
 	int i_biosdisp
 .skip_newline:
+	cmp al, `\b`
+	jne short .skip_backspace
+	mov al, ' '
+	int i_biosdisp
+	mov al, `\b`
+	int i_biosdisp
+.skip_backspace:
 	popa
 	iret
 
