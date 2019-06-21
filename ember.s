@@ -24,6 +24,12 @@ ivtptr:
 
 %define i_putchar  0x21
 	dw putchar
+
+%define i_diskread 0x22
+	dw diskread
+
+%define i_diskwrite 0x23
+	dw diskwrite
 .end:
 
 start:
@@ -33,7 +39,7 @@ start:
 	mov es, cx
 	mov ss, cx
 	mov sp, 0x7c00
-	mov [diskread.diskload+1], dl
+	mov [do_disk.disknum+1], dl
 	sti
 
 	cld
@@ -83,9 +89,7 @@ not_singledump:
 	shr ax, 4  ; into line count
 	mov cx, ax ; prepare loop counter
 
-	lodsb
-	or al, al
-	jnz short parse_error
+	call verify_end
 
 ; Print a hexdump
 ; Returns to `shell`
@@ -141,10 +145,19 @@ not_poke:
 	cmp al, 'g'
 	jnz short not_run
 
+	call verify_end
 	call di
 	jmp short shell
 
 not_run:
+	jmp short parse_error
+
+verify_end:
+	lodsb
+	or al, al
+	jz short readhexbyte.fail ; borrow the return of some other routine
+	pop ax ; discard the return address
+
 parse_error:
 	dec si
 	lodsb
@@ -155,59 +168,6 @@ parse_error:
 	mov al, '?'
 	int i_putchar
 	jmp near shell
-
-; Read a line of text and store it in the global `linebuffer`. The result is
-; null-terminated. No overflow checking is performed.
-readline:
-	pusha
-	cld
-	mov di, linebuffer
-.loop:
-	mov ah, 0
-	int i_bioskbd
-
-	cmp al, 8
-	jne short .nobackspace
-	cmp di, linebuffer
-	je short .loop
-	dec di
-	db 0xb4 ; load the opcode of the stosb to AH to skip its execution
-.nobackspace:
-	stosb
-	int i_putchar
-
-	cmp al, `\r`
-	jne short .loop
-
-	dec di ; undo the store of the line terminatior
-	mov byte[di], 0
-	popa
-	iret
-
-; Put a character on the screen. Expands \r into \r\n because the latter is required
-; by the BIOS for a proper newline. \r is used to signify newlines because that's what
-; the keyboard gives us.
-; Input:
-;  AL = ASCII character
-putchar:
-	pusha
-	mov ah, 0x0e
-	xor bx, bx
-	int i_biosdisp
-	cmp al, `\r` ; all registers are preserved by the BIOS function
-	jne short .skip_newline
-	mov al, `\n`
-	int i_biosdisp
-.skip_newline:
-	cmp al, `\b`
-	jne short .skip_backspace
-	mov al, ' '
-	int i_biosdisp
-	mov al, `\b`
-	int i_biosdisp
-.skip_backspace:
-	popa
-	iret
 
 ; Parse a hexadecimal word.
 ; Input:
@@ -304,12 +264,23 @@ writehexchar:
 	int i_putchar
 	ret
 
+; Write sector
+; Input:
+;  eax = LBA
+;  es:di = operation buffer
+diskwrite:
+	mov byte [do_disk.op+1], 0x43
+	jmp short do_disk
+
 ; Read sector 
 ; Input:
 ;  eax = LBA
 ;  es:di = operation buffer
 ; Stops execution on error
 diskread:
+	mov byte[do_disk.op+1], 0x42
+
+do_disk:
 	pusha
 	push ds
 
@@ -323,9 +294,10 @@ diskread:
 	mov [si+8], eax
 	xor eax, eax
 	mov [si+12], eax
-.diskload:
+.disknum:
 	mov dl, 0 ; overwritten during init
-	mov ah, 0x42
+.op:
+	mov ah, 0x42 ; overwritten when writing
 	int i_biosdisk
 	jc short error
 
@@ -338,6 +310,59 @@ error:
 	int i_putchar
 	cli
 	hlt
+
+; Read a line of text and store it in the global `linebuffer`. The result is
+; null-terminated. No overflow checking is performed.
+readline:
+	pusha
+	cld
+	mov di, linebuffer
+.loop:
+	mov ah, 0
+	int i_bioskbd
+
+	cmp al, 8
+	jne short .nobackspace
+	cmp di, linebuffer
+	je short .loop
+	dec di
+	db 0xb4 ; load the opcode of the stosb to AH to skip its execution
+.nobackspace:
+	stosb
+	int i_putchar
+
+	cmp al, `\r`
+	jne short .loop
+
+	dec di ; undo the store of the line terminatior
+	mov byte[di], 0
+	popa
+	iret
+
+; Put a character on the screen. Expands \r into \r\n because the latter is required
+; by the BIOS for a proper newline. \r is used to signify newlines because that's what
+; the keyboard gives us.
+; Input:
+;  AL = ASCII character
+putchar:
+	pusha
+	mov ah, 0x0e
+	xor bx, bx
+	int i_biosdisp
+	cmp al, `\r` ; all registers are preserved by the BIOS function
+	jne short .skip_newline
+	mov al, `\n`
+	int i_biosdisp
+.skip_newline:
+	cmp al, `\b`
+	jne short .skip_backspace
+	mov al, ' '
+	int i_biosdisp
+	mov al, `\b`
+	int i_biosdisp
+.skip_backspace:
+	popa
+	iret
 
 times 446 - ($ - $$) db 0
 times 64 db 0xff
