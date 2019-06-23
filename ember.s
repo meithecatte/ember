@@ -125,7 +125,7 @@ hexdump:
 not_rangedump:
 	cmp al, ':'
 	jnz short not_poke
-	mov bx, di
+	mov bx, di ; move the read location
 
 .loop:
 	lodsb
@@ -150,7 +150,7 @@ not_poke:
 	jmp short shell
 
 not_run:
-	jmp short parse_error
+	jmp short parse_error ; TODO: make this a direct jump when features are finalized
 
 verify_end:
 	lodsb
@@ -264,7 +264,8 @@ writehexchar:
 	int i_putchar
 	ret
 
-; Write sector
+; Interrupt 0x23
+; Write sector on the boot disk
 ; Input:
 ;  eax = LBA
 ;  es:di = operation buffer
@@ -272,7 +273,8 @@ diskwrite:
 	mov byte [do_disk.op+1], 0x43
 	jmp short do_disk
 
-; Read sector 
+; Interrupt 0x22
+; Read sector on the boot disk
 ; Input:
 ;  eax = LBA
 ;  es:di = operation buffer
@@ -311,7 +313,8 @@ error:
 	cli
 	hlt
 
-; Read a line of text and store it in the global `linebuffer`. The result is
+; Interrupt 0x20
+; Read a line of text and store it in the global `linebuffer` (0x600). The result is
 ; null-terminated. No overflow checking is performed.
 readline:
 	pusha
@@ -339,6 +342,7 @@ readline:
 	popa
 	iret
 
+; Interrupt 0x21
 ; Put a character on the screen. Expands \r into \r\n because the latter is required
 ; by the BIOS for a proper newline. \r is used to signify newlines because that's what
 ; the keyboard gives us.
