@@ -1,3 +1,12 @@
+; https://github.com/NieDzejkob/ember
+; this overwrites bootOS :D
+; you can install it to you hdd too
+
+; commands to install:
+;   * run 00<your drive id here>d
+;   * run 7c00w00000000
+;     * installs it to the first sector
+
 ; memory map:
 ; [0000; 0400) IVT
 ; [0400; 0500) BDA
@@ -54,7 +63,7 @@ start:
 
 	xor bx, bx
 shell:
-	mov al, '>'
+	mov al, ')'
 	int i_putchar
 
 	int i_readline
@@ -183,7 +192,29 @@ not_run:
 	jmp shell
 
 not_rw:
-	jmp short parse_error ; TODO: make this a direct jump when features are finalized
+	cmp al, 'p'
+	jnz short not_print
+
+	mov cx, 16
+	mov si, di
+	mov ah, 0x0e
+	mov bx, 0x0007
+.loop:	lodsb
+	int 0x10
+	loop .loop
+
+	mov al, 0x0d
+	int i_putchar
+
+	jmp shell
+
+not_print:
+	cmp al, 'd'
+	jnz short parse_error ; TODO: make this a direct jump when features are finalized
+	xchg ax, di
+	mov byte [do_disk.disknum+1], al
+
+	jmp shell
 
 verify_end:
 	lodsb
@@ -200,7 +231,7 @@ parse_error:
 .skip_char:
 	mov al, '?'
 	int i_putchar
-	mov al, 0x0a
+	mov al, 0x0d
 	int i_putchar
 	jmp near shell
 
@@ -404,5 +435,3 @@ putchar:
 
 times 510 - ($ - $$) db 0
 	dw 0xaa55
-
-times 65536 db 0
