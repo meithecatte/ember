@@ -82,7 +82,7 @@ not_singledump:
 	jnz short not_rangedump
 
 	call readhexword
-	jc short parse_error
+	jc parse_error
 
 	sub ax, bx ; length in bytes
 	add ax, 15 ; round up
@@ -147,9 +147,42 @@ not_poke:
 
 	call verify_end
 	call di
-	jmp short shell
+	jmp shell
 
 not_run:
+	cmp al, 'w'
+	jnz short .not_write
+	mov cl, 0x00
+	jmp short .continue
+.not_write:
+	cmp al, 'r'
+	mov cl, 0x01
+	jnz short not_rw
+.continue:	
+        mov bx, di ; move the read location
+	call readhexword
+        jc short parse_error
+	shl eax, 16
+	call readhexword
+        jc short parse_error
+	; eax should hold our lba now
+
+	mov di, bx
+	push es
+	push cs
+	pop es
+	cmp cl, 0x01
+	je .read
+	int i_diskwrite
+	jmp .continue2
+.read:
+	int i_diskread
+.continue2:
+	pop es
+
+	jmp shell
+
+not_rw:
 	jmp short parse_error ; TODO: make this a direct jump when features are finalized
 
 verify_end:
@@ -166,6 +199,8 @@ parse_error:
 	int i_putchar
 .skip_char:
 	mov al, '?'
+	int i_putchar
+	mov al, 0x0a
 	int i_putchar
 	jmp near shell
 
@@ -289,7 +324,7 @@ do_disk:
 	push cs
 	pop ds
 
-	mov si, 0x7df0
+	mov si, 0x7e00
 	mov dword[si], 0x10010
 	mov [si+4], di
 	mov [si+6], es
@@ -310,8 +345,7 @@ do_disk:
 error:
 	mov al, '!'
 	int i_putchar
-	cli
-	hlt
+	jmp shell
 
 ; Interrupt 0x20
 ; Read a line of text and store it in the global `linebuffer` (0x600). The result is
@@ -368,6 +402,7 @@ putchar:
 	popa
 	iret
 
-times 446 - ($ - $$) db 0
-times 64 db 0xff
+times 510 - ($ - $$) db 0
 	dw 0xaa55
+
+times 65536 db 0
