@@ -1,26 +1,35 @@
-; https://github.com/NieDzejkob/ember
-; this overwrites bootOS :D
-; you can install it to you hdd too
-
 ; commands to install:
 ;   * run 00<your drive id here>d
-;   * run 7c00w00000000
+;   * run 7a00w00000000
 ;     * installs it to the first sector
 
 ; memory map:
 ; [0000; 0400) IVT
 ; [0400; 0500) BDA
-; [    ; 7c00) stack
-; [7c00; 7e00) MBR
-; [7de0; 7deb) filename buffer
-; [7df0; 7e00) EDD disk packet
-; [7e00;     ) variables
+; [    ; 7a00) stack
+; [7a00; 7c00) MBR
+; [7be0; 7beb) filename buffer
+; [7e00; 7e10) EDD disk packet
+; [7e10;     ) variables
 
-org 0x7c00
+org 0x7a00
 bits 16
 
 %define linebuffer 0x600
 ; Some BIOSes start with CS=07c0. Make sure this does not wreak havoc
+	cli
+	cld
+	xor cx, cx
+	mov ds, cx
+	mov es, cx
+	mov ss, cx
+	mov sp, 0x7a00
+
+	mov si, 0x7c00
+	mov di, 0x7a00
+	mov cx, 512
+	rep movsb
+
 	jmp 0:start
 
 ivtptr:
@@ -42,16 +51,9 @@ ivtptr:
 .end:
 
 start:
-	cli
-	xor cx, cx
-	mov ds, cx
-	mov es, cx
-	mov ss, cx
-	mov sp, 0x7c00
 	mov [do_disk.disknum+1], dl
 	sti
 
-	cld
 	mov di, 0x20 * 4
 	mov si, ivtptr
 	mov cl, ivtptr.end - ivtptr
@@ -176,17 +178,12 @@ not_run:
         jc short parse_error
 	; eax should hold our lba now
 
-	mov di, bx
 	push es
 	push cs
 	pop es
-	cmp cl, 0x01
-	je .read
-	int i_diskwrite
-	jmp .continue2
-.read:
-	int i_diskread
-.continue2:
+	mov byte [.mod+1], i_diskread
+	add byte [.mod+1], cl
+.mod:	int i_diskwrite
 	pop es
 
 	jmp shell
@@ -196,12 +193,14 @@ not_rw:
 	jnz short not_print
 
 	mov cx, 16
-	mov si, di
+	xchg si, di
 	mov ah, 0x0e
 	mov bx, 0x0007
 .loop:	lodsb
 	int 0x10
 	loop .loop
+
+	xchg si, di
 
 	mov al, 0x0d
 	int i_putchar
@@ -210,11 +209,20 @@ not_rw:
 
 not_print:
 	cmp al, 'd'
-	jnz short parse_error ; TODO: make this a direct jump when features are finalized
+	jnz short not_drive
 	xchg ax, di
 	mov byte [do_disk.disknum+1], al
 
 	jmp shell
+
+not_drive:
+	cmp al, ';'
+	jnz short parse_error ; TODO: make this a direct jump when features are finalized
+.loop	lodsb
+	cmp al, 0x00
+	je shell
+	stosb
+	jmp .loop
 
 verify_end:
 	lodsb
@@ -369,14 +377,14 @@ do_disk:
 	int i_biosdisk
 	jc short error
 
-	pop ds
+.ret:	pop ds
 	popa
 	iret
 
 error:
 	mov al, '!'
 	int i_putchar
-	jmp shell
+	jmp short do_disk.ret
 
 ; Interrupt 0x20
 ; Read a line of text and store it in the global `linebuffer` (0x600). The result is
