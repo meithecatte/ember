@@ -217,7 +217,7 @@ not_print:
 
 not_drive:
 	cmp al, ';'
-	jnz short parse_error ; TODO: make this a direct jump when features are finalized
+	jnz short parse_error
 .loop	lodsb
 	cmp al, 0x00
 	je shell
@@ -352,16 +352,12 @@ diskwrite:
 ; Input:
 ;  eax = LBA
 ;  es:di = operation buffer
-; Stops execution on error
+; Sets carry flag on error
 diskread:
 	mov byte[do_disk.op+1], 0x42
 
 do_disk:
 	pusha
-	push ds
-
-	push cs
-	pop ds
 
 	mov si, 0x7e00
 	mov dword[si], 0x10010
@@ -374,17 +370,20 @@ do_disk:
 	mov dl, 0 ; overwritten during init
 .op:
 	mov ah, 0x42 ; overwritten when writing
+	clc
 	int i_biosdisk
-	jc short error
-
-.ret:	pop ds
-	popa
-	iret
-
-error:
+	jnc short .ret
+.error:
 	mov al, '!'
 	int i_putchar
-	jmp short do_disk.ret
+	stc
+.ret:	popa
+	push bp
+	mov bp,sp
+        rcl byte [bp+6],1
+	pop bp
+	iret
+
 
 ; Interrupt 0x20
 ; Read a line of text and store it in the global `linebuffer` (0x600). The result is
