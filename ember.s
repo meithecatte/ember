@@ -1,17 +1,35 @@
+; commands to install:
+;   * run 00<your drive id here>d
+;   * run 7a00w00000000
+;     * installs it to the first sector
+
 ; memory map:
 ; [0000; 0400) IVT
 ; [0400; 0500) BDA
-; [    ; 7c00) stack
-; [7c00; 7e00) MBR
-; [7de0; 7deb) filename buffer
-; [7df0; 7e00) EDD disk packet
-; [7e00;     ) variables
+; [    ; 7a00) stack
+; [7a00; 7c00) MBR
+; [7be0; 7beb) filename buffer
+; [7e00; 7e10) EDD disk packet
+; [7e10;     ) variables
 
-org 0x7c00
+org 0x7a00
 bits 16
 
 %define linebuffer 0x600
 ; Some BIOSes start with CS=07c0. Make sure this does not wreak havoc
+	cli
+	cld
+	xor cx, cx
+	mov ds, cx
+	mov es, cx
+	mov ss, cx
+	mov sp, 0x7a00
+
+	mov si, 0x7c00
+	mov di, 0x7a00
+	mov cx, 512
+	rep movsb
+
 	jmp 0:start
 
 ivtptr:
@@ -33,16 +51,9 @@ ivtptr:
 .end:
 
 start:
-	cli
-	xor cx, cx
-	mov ds, cx
-	mov es, cx
-	mov ss, cx
-	mov sp, 0x7c00
 	mov [do_disk.disknum+1], dl
 	sti
 
-	cld
 	mov di, 0x20 * 4
 	mov si, ivtptr
 	mov cl, ivtptr.end - ivtptr
@@ -54,7 +65,7 @@ start:
 
 	xor bx, bx
 shell:
-	mov al, '>'
+	mov al, ')'
 	int i_putchar
 
 	int i_readline
@@ -82,7 +93,7 @@ not_singledump:
 	jnz short not_rangedump
 
 	call readhexword
-	jc short parse_error
+	jc parse_error
 
 	sub ax, bx ; length in bytes
 	add ax, 15 ; round up
@@ -147,10 +158,66 @@ not_poke:
 
 	call verify_end
 	call di
-	jmp short shell
+	jmp shell
 
 not_run:
-	jmp short parse_error ; TODO: make this a direct jump when features are finalized
+	cmp al, 'w'
+	jnz short .not_write
+	mov cl, i_diskwrite
+	jmp short .continue
+.not_write:
+	cmp al, 'r'
+	mov cl, i_diskread
+	jnz short not_rw
+.continue:	
+        mov bx, di ; move the read location
+	call readhexword
+        jc short parse_error
+	shl eax, 16
+	call readhexword
+        jc short parse_error
+	; eax should hold our lba now
+
+	mov byte [.mod+1], cl
+.mod:	int i_diskwrite
+
+	jmp shell
+
+not_rw:
+	cmp al, 'p'
+	jnz short not_print
+
+	mov cx, 16
+	xchg si, di
+	mov ah, 0x0e
+	mov bx, 0x0007
+.loop:	lodsb
+	int 0x10
+	loop .loop
+
+	xchg si, di
+
+	mov al, 0x0d
+	int i_putchar
+
+	jmp shell
+
+not_print:
+	cmp al, 'd'
+	jnz short not_drive
+	xchg ax, di
+	mov byte [do_disk.disknum+1], al
+
+	jmp shell
+
+not_drive:
+	cmp al, ';'
+	jnz short parse_error
+.loop	lodsb
+	cmp al, 0x00
+	je shell
+	stosb
+	jmp .loop
 
 verify_end:
 	lodsb
@@ -166,6 +233,8 @@ parse_error:
 	int i_putchar
 .skip_char:
 	mov al, '?'
+	int i_putchar
+	mov al, 0x0d
 	int i_putchar
 	jmp near shell
 
@@ -278,18 +347,14 @@ diskwrite:
 ; Input:
 ;  eax = LBA
 ;  es:di = operation buffer
-; Stops execution on error
+; Sets carry flag on error
 diskread:
 	mov byte[do_disk.op+1], 0x42
 
 do_disk:
 	pusha
-	push ds
 
-	push cs
-	pop ds
-
-	mov si, 0x7df0
+	mov si, 0x7e00
 	mov dword[si], 0x10010
 	mov [si+4], di
 	mov [si+6], es
@@ -300,18 +365,20 @@ do_disk:
 	mov dl, 0 ; overwritten during init
 .op:
 	mov ah, 0x42 ; overwritten when writing
+	clc
 	int i_biosdisk
-	jc short error
-
-	pop ds
-	popa
-	iret
-
-error:
+	jnc short .ret
+.error:
 	mov al, '!'
 	int i_putchar
-	cli
-	hlt
+	stc
+.ret:	popa
+	push bp
+	mov bp,sp
+        rcl byte [bp+6],1
+	pop bp
+	iret
+
 
 ; Interrupt 0x20
 ; Read a line of text and store it in the global `linebuffer` (0x600). The result is
@@ -368,6 +435,5 @@ putchar:
 	popa
 	iret
 
-times 446 - ($ - $$) db 0
-times 64 db 0xff
+times 510 - ($ - $$) db 0
 	dw 0xaa55
