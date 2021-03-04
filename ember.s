@@ -163,11 +163,11 @@ not_poke:
 not_run:
 	cmp al, 'w'
 	jnz short .not_write
-	mov cl, 0x00
+	mov cl, i_diskwrite
 	jmp short .continue
 .not_write:
 	cmp al, 'r'
-	mov cl, 0x01
+	mov cl, i_diskread
 	jnz short not_rw
 .continue:	
         mov bx, di ; move the read location
@@ -178,13 +178,8 @@ not_run:
         jc short parse_error
 	; eax should hold our lba now
 
-	push es
-	push cs
-	pop es
-	mov byte [.mod+1], i_diskread
-	add byte [.mod+1], cl
+	mov byte [.mod+1], cl
 .mod:	int i_diskwrite
-	pop es
 
 	jmp shell
 
